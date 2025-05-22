@@ -12,11 +12,13 @@ pipeline {
     stages {
         stage('Build Docker Images') {
             steps {
-                dir('product-service') {
-                    sh 'docker build -t $DOCKER_IMAGE_PRODUCT .'
-                }
-                dir('order-service') {
-                    sh 'docker build -t $DOCKER_IMAGE_ORDER .'
+                script {
+                    dir('product-service') {
+                        sh "docker build -t ${DOCKER_IMAGE_PRODUCT} ."
+                    }
+                    dir('order-service') {
+                        sh "docker build -t ${DOCKER_IMAGE_ORDER} ."
+                    }
                 }
             }
         }
@@ -24,64 +26,70 @@ pipeline {
         stage('Push Docker Images') {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    sh '''
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker push $DOCKER_IMAGE_PRODUCT
-                        docker push $DOCKER_IMAGE_ORDER
-                    '''
+                    sh """
+                        echo "${DOCKER_PASS}" | docker login -u "${DOCKER_USER}" --password-stdin
+                        docker push ${DOCKER_IMAGE_PRODUCT}
+                        docker push ${DOCKER_IMAGE_ORDER}
+                    """
                 }
             }
         }
 
         stage('Deploy to Kubernetes') {
             steps {
-                sh '''
-                    kubectl create namespace $K8S_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-                    kubectl apply -f k8s/product-deployment.yaml -n $K8S_NAMESPACE
-                    kubectl apply -f k8s/order-deployment.yaml -n $K8S_NAMESPACE
-                    kubectl apply -f k8s/hpa.yaml -n $K8S_NAMESPACE
-                    kubectl apply -f k8s/ingress.yaml -n $K8S_NAMESPACE
-                '''
+                sh """
+                    kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+                    kubectl apply -f k8s/product-deployment.yaml -n ${K8S_NAMESPACE}
+                    kubectl apply -f k8s/order-deployment.yaml -n ${K8S_NAMESPACE}
+                    kubectl apply -f k8s/hpa.yaml -n ${K8S_NAMESPACE}
+                    kubectl apply -f k8s/ingress.yaml -n ${K8S_NAMESPACE}
+                """
             }
         }
 
         stage('Install Monitoring Tools') {
             steps {
-                sh '''
+                sh """
                     helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
                     helm repo update
                     helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
-                        --namespace $MONITORING_NAMESPACE --create-namespace --wait
-                '''
+                        --namespace ${MONITORING_NAMESPACE} --create-namespace --wait
+                """
             }
         }
 
         stage('Apply Monitoring Config') {
             steps {
-                sh '''
-                    kubectl apply -f k8s/service-monitors/product-service-monitor.yaml -n $MONITORING_NAMESPACE
-                    kubectl apply -f k8s/service-monitors/order-service-monitor.yaml -n $MONITORING_NAMESPACE
-                '''
+                sh """
+                    kubectl apply -f k8s/service-monitors/product-service-monitor.yaml -n ${MONITORING_NAMESPACE}
+                    kubectl apply -f k8s/service-monitors/order-service-monitor.yaml -n ${MONITORING_NAMESPACE}
+                """
             }
         }
 
         stage('Verify Deployments & Services') {
             steps {
-                sh '''
-                    kubectl get all -n $K8S_NAMESPACE
-                    kubectl get all -n $MONITORING_NAMESPACE
-                '''
+                sh """
+                    echo "🔍 Checking resources in ${K8S_NAMESPACE} namespace..."
+                    kubectl get all -n ${K8S_NAMESPACE}
+                    
+                    echo " Checking resources in ${MONITORING_NAMESPACE} namespace..."
+                    kubectl get all -n ${MONITORING_NAMESPACE}
+                """
             }
         }
     }
 
     post {
         always {
-            echo 'Cleaning up any background processes...'
-            sh 'pkill -f kubectl port-forward || true'
+            echo ' Cleaning up any background processes...'
+            sh 'pkill -f "kubectl port-forward" || true'
         }
         failure {
-            echo 'Pipeline failed. Check cluster status and permissions.'
+            echo ' Pipeline failed. Check cluster status, image pushes, and Helm setup.'
+        }
+        success {
+            echo ' Pipeline completed successfully.'
         }
     }
 }
