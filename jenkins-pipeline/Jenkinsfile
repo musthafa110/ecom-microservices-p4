@@ -2,34 +2,51 @@ pipeline {
     agent any
 
     environment {
-        KUBECONFIG = "/var/lib/jenkins/.kube/config"
-        DOCKER_IMAGE_PRODUCT = "musthafa110/product-service"
-        DOCKER_IMAGE_ORDER = "musthafa110/order-service"
-        K8S_NAMESPACE = "ecommerce"
-        MONITORING_NAMESPACE = "monitoring"
+        DOCKER_CREDENTIALS_ID = 'dockerhub-creds'
+        PRODUCT_IMAGE = 'musthafa110/product-service'
+        ORDER_IMAGE = 'musthafa110/order-service'
+        KUBECONFIG = '/var/lib/jenkins/.kube/config'
+        NAMESPACE = 'default'
+        MONITORING_NAMESPACE = 'monitoring'
     }
 
     stages {
+        stage('Checkout Source Code') {
+            steps {
+                git branch: 'main', url: 'https://github.com/musthafa110/ecom-microservices-p4.git'
+            }
+        }
+
         stage('Build Docker Images') {
             steps {
                 script {
-                    dir('product-service') {
-                        sh "docker build -t ${DOCKER_IMAGE_PRODUCT} ."
-                    }
-                    dir('order-service') {
-                        sh "docker build -t ${DOCKER_IMAGE_ORDER} ."
+                    docker.build("${PRODUCT_IMAGE}:latest", './product-service')
+                    docker.build("${ORDER_IMAGE}:latest", './order-service')
+                }
+            }
+        }
+
+        stage('Push Docker Images to Docker Hub') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS_ID}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        docker.withRegistry('', "${DOCKER_CREDENTIALS_ID}") {
+                            docker.image("${PRODUCT_IMAGE}:latest").push()
+                            docker.image("${ORDER_IMAGE}:latest").push()
+                        }
                     }
                 }
             }
         }
 
-        stage('Push Docker Images') {
+        stage('Install Monitoring Tools') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'docker-hub-credentials', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                script {
                     sh """
-                        echo "${DOCKER_PASS}" | docker login -u "${DOCKER_USER}" --password-stdin
-                        docker push ${DOCKER_IMAGE_PRODUCT}
-                        docker push ${DOCKER_IMAGE_ORDER}
+                        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
+                        helm repo update
+                        helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+                            --namespace ${MONITORING_NAMESPACE} --create-namespace --wait
                     """
                 }
             }
@@ -37,59 +54,59 @@ pipeline {
 
         stage('Deploy to Kubernetes') {
             steps {
-                sh """
-                    kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
-                    kubectl apply -f k8s/product-deployment.yaml -n ${K8S_NAMESPACE}
-                    kubectl apply -f k8s/order-deployment.yaml -n ${K8S_NAMESPACE}
-                    kubectl apply -f k8s/hpa.yaml -n ${K8S_NAMESPACE}
-                    kubectl apply -f k8s/ingress.yaml -n ${K8S_NAMESPACE}
-                """
-            }
-        }
-
-        stage('Install Monitoring Tools') {
-            steps {
-                sh """
-                    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
-                    helm repo update
-                    helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
-                        --namespace ${MONITORING_NAMESPACE} --create-namespace --wait
-                """
-            }
-        }
-
-        stage('Apply Monitoring Config') {
-            steps {
-                sh """
-                    kubectl apply -f k8s/service-monitors/product-service-monitor.yaml -n ${MONITORING_NAMESPACE}
-                    kubectl apply -f k8s/service-monitors/order-service-monitor.yaml -n ${MONITORING_NAMESPACE}
-                """
+                script {
+                    sh """
+                        kubectl apply -f k8s/product-deployment.yaml -n ${NAMESPACE}
+                        kubectl apply -f k8s/order-deployment.yaml -n ${NAMESPACE}
+                        kubectl apply -f k8s/ingress.yaml -n ${NAMESPACE}
+                        kubectl apply -f k8s/hpa.yaml -n ${NAMESPACE}
+                        kubectl apply -f k8s/service-monitors/ -n ${MONITORING_NAMESPACE}
+                    """
+                }
             }
         }
 
         stage('Verify Deployments & Services') {
             steps {
-                sh """
-                    echo "🔍 Checking resources in ${K8S_NAMESPACE} namespace..."
-                    kubectl get all -n ${K8S_NAMESPACE}
-                    
-                    echo " Checking resources in ${MONITORING_NAMESPACE} namespace..."
-                    kubectl get all -n ${MONITORING_NAMESPACE}
-                """
+                script {
+                    sh """
+                        echo "App Pods in '${NAMESPACE}' Namespace:"
+                        kubectl get pods -n ${NAMESPACE}
+
+                        echo "Monitoring Pods in '${MONITORING_NAMESPACE}' Namespace:"
+                        kubectl get pods -n ${MONITORING_NAMESPACE}
+
+                        echo "Monitoring Services:"
+                        kubectl get svc -n ${MONITORING_NAMESPACE}
+                    """
+                }
+            }
+        }
+
+        stage('Expose Monitoring Dashboards') {
+            steps {
+                script {
+                    sh """
+                        nohup kubectl port-forward svc/kube-prometheus-stack-grafana 3000:80 -n ${MONITORING_NAMESPACE} > grafana.log 2>&1 &
+                        nohup kubectl port-forward svc/kube-prometheus-stack-prometheus 9090:9090 -n ${MONITORING_NAMESPACE} > prometheus.log 2>&1 &
+                    """
+                }
             }
         }
     }
 
     post {
-        always {
-            echo ' Cleaning up any background processes...'
-            sh 'pkill -f "kubectl port-forward" || true'
+        success {
+            echo "Deployment completed successfully."
+            echo "Grafana: http://localhost:3000"
+            echo "Prometheus: http://localhost:9090"
         }
         failure {
-            echo ' Pipeline failed. Check cluster status, image pushes, and Helm setup.'
+            echo "Pipeline failed. Check build logs, Helm status, and Kubernetes resources."
         }
-        success {
-            echo ' Pipeline completed successfully.'
+        always {
+            echo "Cleaning up background port-forward processes..."
+            sh "pkill -f 'kubectl port-forward' || true"
         }
     }
 }
