@@ -3,19 +3,21 @@ kind: Ingress
 metadata:
   name: ecom-ingress
   namespace: default
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
 spec:
   rules:
     - host: ecom.local
       http:
         paths:
-          - path: /products
+          - path: /products(/|$)(.*)
             pathType: Prefix
             backend:
               service:
                 name: product-service
                 port:
                   number: 80
-          - path: /orders
+          - path: /orders(/|$)(.*)
             pathType: Prefix
             backend:
               service:
