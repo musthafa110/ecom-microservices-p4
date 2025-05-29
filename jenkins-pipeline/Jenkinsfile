@@ -55,6 +55,7 @@ pipeline {
         stage('Deploy to Kubernetes') {
             steps {
                 script {
+                    // Make sure deployment YAMLs have imagePullPolicy: Always
                     sh """
                         kubectl apply -f k8s/product-deployment.yaml -n ${NAMESPACE}
                         kubectl apply -f k8s/order-deployment.yaml -n ${NAMESPACE}
@@ -83,7 +84,10 @@ pipeline {
             }
         }
 
-        stage('Expose Monitoring Dashboards') {
+        stage('Expose Monitoring Dashboards (Local Only)') {
+            when {
+                expression { return false } // Set to true only for local testing
+            }
             steps {
                 script {
                     sh """
@@ -105,8 +109,9 @@ pipeline {
             echo "Pipeline failed. Check build logs, Helm status, and Kubernetes resources."
         }
         always {
-            echo "Cleaning up background port-forward processes..."
+            echo "Cleaning up background processes..."
             sh "pkill -f 'kubectl port-forward' || true"
+            sh "docker logout || true"
         }
     }
 }
