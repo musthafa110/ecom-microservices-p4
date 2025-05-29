@@ -26,18 +26,26 @@ pipeline {
             }
         }
 
-        stage('Login & Push Docker Images') {
-            steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS_ID}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh "echo ${DOCKER_PASS} | docker login -u ${DOCKER_USER} --password-stdin"
-                        docker.image("${PRODUCT_IMAGE}:latest").push()
-                        docker.image("${ORDER_IMAGE}:latest").push()
-                        sh "docker logout"
-                    }
+       stage('Login & Push Docker Images') {
+    steps {
+        script {
+            withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS_ID}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                sh "echo ${DOCKER_PASS} | docker login -u ${DOCKER_USER} --password-stdin"
+                
+                retry(3) {
+                    docker.image("${PRODUCT_IMAGE}:latest").push()
                 }
+                
+                retry(3) {
+                    docker.image("${ORDER_IMAGE}:latest").push()
+                }
+                
+                sh "docker logout"
             }
         }
+    }
+}
+
 
         stage('Install Monitoring Stack') {
             steps {
