@@ -26,39 +26,38 @@ pipeline {
             }
         }
 
-        stage('Push Docker Images to Docker Hub') {
+        stage('Login & Push Docker Images') {
             steps {
                 script {
                     withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS_ID}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        docker.withRegistry('', "${DOCKER_CREDENTIALS_ID}") {
-                            docker.image("${PRODUCT_IMAGE}:latest").push()
-                            docker.image("${ORDER_IMAGE}:latest").push()
-                        }
+                        sh "echo ${DOCKER_PASS} | docker login -u ${DOCKER_USER} --password-stdin"
+                        docker.image("${PRODUCT_IMAGE}:latest").push()
+                        docker.image("${ORDER_IMAGE}:latest").push()
+                        sh "docker logout"
                     }
                 }
             }
         }
 
-        stage('Install Monitoring Tools') {
+        stage('Install Monitoring Stack') {
             steps {
                 script {
                     sh """
                         helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
                         helm repo update
-                        helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+                        helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \\
                             --namespace ${MONITORING_NAMESPACE} --create-namespace --wait
                     """
                 }
             }
         }
 
-        stage('Deploy to Kubernetes') {
+        stage('Deploy Services to Kubernetes') {
             steps {
                 script {
-                    // Make sure deployment YAMLs have imagePullPolicy: Always
                     sh """
-                        kubectl apply -f k8s/product-deployment.yaml -n ${NAMESPACE}
-                        kubectl apply -f k8s/order-deployment.yaml -n ${NAMESPACE}
+                        kubectl apply -f k8s/product-deployment.yaml -n ${NAMESPACE} --record
+                        kubectl apply -f k8s/order-deployment.yaml -n ${NAMESPACE} --record
                         kubectl apply -f k8s/ingress.yaml -n ${NAMESPACE}
                         kubectl apply -f k8s/hpa.yaml -n ${NAMESPACE}
                         kubectl apply -f k8s/service-monitors/ -n ${MONITORING_NAMESPACE}
@@ -71,10 +70,10 @@ pipeline {
             steps {
                 script {
                     sh """
-                        echo "App Pods in '${NAMESPACE}' Namespace:"
+                        echo "App Pods in '${NAMESPACE}':"
                         kubectl get pods -n ${NAMESPACE}
 
-                        echo "Monitoring Pods in '${MONITORING_NAMESPACE}' Namespace:"
+                        echo "Monitoring Pods in '${MONITORING_NAMESPACE}':"
                         kubectl get pods -n ${MONITORING_NAMESPACE}
 
                         echo "Monitoring Services:"
@@ -86,7 +85,7 @@ pipeline {
 
         stage('Expose Monitoring Dashboards (Local Only)') {
             when {
-                expression { return false } // Set to true only for local testing
+                expression { return false } // Change to true for local dev
             }
             steps {
                 script {
@@ -106,12 +105,11 @@ pipeline {
             echo "Prometheus: http://localhost:9090"
         }
         failure {
-            echo "Pipeline failed. Check build logs, Helm status, and Kubernetes resources."
+            echo "Pipeline failed. Check logs, Helm output, and Kubernetes resources."
         }
         always {
-            echo "Cleaning up background processes..."
+            echo "Cleaning up..."
             sh "pkill -f 'kubectl port-forward' || true"
-            sh "docker logout || true"
         }
     }
 }
