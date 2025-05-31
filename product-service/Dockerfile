@@ -7,5 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]
+ARG VERSION=unknown
+ENV VERSION=${VERSION}
 
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]
