@@ -17,107 +17,69 @@ pipeline {
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Build & Push Docker Images (Blue & Green)') {
             steps {
                 script {
-                    docker.build("${PRODUCT_IMAGE}:latest", './product-service')
-                    docker.build("${ORDER_IMAGE}:latest", './order-service')
+                    withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS_ID}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                        sh "echo ${DOCKER_PASS} | docker login -u ${DOCKER_USER} --password-stdin"
+
+                        def variants = ['blue', 'green']
+                        for (v in variants) {
+                            docker.build("${PRODUCT_IMAGE}:${v}", "./product-service")
+                            docker.build("${ORDER_IMAGE}:${v}", "./order-service")
+                            docker.image("${PRODUCT_IMAGE}:${v}").push()
+                            docker.image("${ORDER_IMAGE}:${v}").push()
+                        }
+
+                        sh "docker logout"
+                    }
                 }
             }
         }
-
-       stage('Login & Push Docker Images') {
-    steps {
-        script {
-            withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS_ID}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                sh "echo ${DOCKER_PASS} | docker login -u ${DOCKER_USER} --password-stdin"
-                
-                retry(3) {
-                    docker.image("${PRODUCT_IMAGE}:latest").push()
-                }
-                
-                retry(3) {
-                    docker.image("${ORDER_IMAGE}:latest").push()
-                }
-                
-                sh "docker logout"
-            }
-        }
-    }
-}
-
 
         stage('Install Monitoring Stack') {
             steps {
-                script {
-                    sh """
-                        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
-                        helm repo update
-                        helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \\
-                            --namespace ${MONITORING_NAMESPACE} --create-namespace --wait
-                    """
-                }
+                sh """
+                    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts || true
+                    helm repo update
+                    helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \\
+                        --namespace ${MONITORING_NAMESPACE} --create-namespace --wait
+                """
             }
         }
 
-        stage('Deploy Services to Kubernetes') {
+        stage('Deploy Green Services to Kubernetes') {
             steps {
-                script {
-                    sh """
-                        kubectl apply -f k8s/product-deployment.yaml -n ${NAMESPACE} --record
-                        kubectl apply -f k8s/order-deployment.yaml -n ${NAMESPACE} --record
-                        kubectl apply -f k8s/ingress.yaml -n ${NAMESPACE}
-                        kubectl apply -f k8s/hpa.yaml -n ${NAMESPACE}
-                        kubectl apply -f k8s/service-monitors/ -n ${MONITORING_NAMESPACE}
-                    """
-                }
+                sh """
+                    kubectl apply -f k8s/product/deployment-green.yaml -n ${NAMESPACE} --record
+                    kubectl apply -f k8s/order/deployment-green.yaml -n ${NAMESPACE} --record
+                    kubectl apply -f k8s/product/service.yaml -n ${NAMESPACE}
+                    kubectl apply -f k8s/order/service.yaml -n ${NAMESPACE}
+                    kubectl apply -f k8s/ingress.yaml -n ${NAMESPACE}
+                    kubectl apply -f k8s/hpa.yaml -n ${NAMESPACE}
+                    kubectl apply -f k8s/product/service-monitor.yaml -n ${MONITORING_NAMESPACE}
+                    kubectl apply -f k8s/order/service-monitor.yaml -n ${MONITORING_NAMESPACE}
+                """
             }
         }
 
-        stage('Verify Deployments & Services') {
+        stage('Verify Deployments') {
             steps {
-                script {
-                    sh """
-                        echo "App Pods in '${NAMESPACE}':"
-                        kubectl get pods -n ${NAMESPACE}
-
-                        echo "Monitoring Pods in '${MONITORING_NAMESPACE}':"
-                        kubectl get pods -n ${MONITORING_NAMESPACE}
-
-                        echo "Monitoring Services:"
-                        kubectl get svc -n ${MONITORING_NAMESPACE}
-                    """
-                }
-            }
-        }
-
-        stage('Expose Monitoring Dashboards (Local Only)') {
-            when {
-                expression { return false } // Change to true for local dev
-            }
-            steps {
-                script {
-                    sh """
-                        nohup kubectl port-forward svc/kube-prometheus-stack-grafana 3000:80 -n ${MONITORING_NAMESPACE} > grafana.log 2>&1 &
-                        nohup kubectl port-forward svc/kube-prometheus-stack-prometheus 9090:9090 -n ${MONITORING_NAMESPACE} > prometheus.log 2>&1 &
-                    """
-                }
+                sh """
+                    kubectl get pods -n ${NAMESPACE}
+                    kubectl get svc -n ${NAMESPACE}
+                    kubectl get deployments -n ${NAMESPACE}
+                """
             }
         }
     }
 
     post {
         success {
-            echo "Deployment completed successfully."
-            echo "Grafana: http://localhost:3000"
-            echo "Prometheus: http://localhost:9090"
+            echo "Blue/Green Deployment completed. Green version is currently active."
         }
         failure {
-            echo "Pipeline failed. Check logs, Helm output, and Kubernetes resources."
-        }
-        always {
-            echo "Cleaning up..."
-            sh "pkill -f 'kubectl port-forward' || true"
+            echo "Deployment failed."
         }
     }
 }
