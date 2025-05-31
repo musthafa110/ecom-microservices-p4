@@ -76,7 +76,7 @@ pipeline {
 
     post {
         success {
-            echo "Blue/Green Deployment completed. Green version is currently active."
+            echo "Deployment completed successfully. Green version is active."
         }
         failure {
             echo "Deployment failed."
