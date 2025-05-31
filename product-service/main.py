@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -5,9 +6,11 @@ from prometheus_fastapi_instrumentator import Instrumentator
 app = FastAPI()
 Instrumentator().instrument(app).expose(app)
 
+VERSION = os.getenv("VERSION", "unknown")
+
 @app.get("/", response_class=HTMLResponse)
 def read_root():
-    return """
+    return f"""
     <html>
         <head><title>Product Service</title></head>
         <body>
