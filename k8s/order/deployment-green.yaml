@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-deployment-green
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order
+      version: green
+  template:
+    metadata:
+      labels:
+        app: order
+        version: green
+    spec:
+      containers:
+        - name: order
+          image: musthafa110/order-service:green
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
