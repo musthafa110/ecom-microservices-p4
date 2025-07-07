@@ -5,6 +5,7 @@ pipeline {
         DOCKER_CREDENTIALS_ID = 'dockerhub-creds'
         PRODUCT_IMAGE = 'musthafa110/product-service'
         ORDER_IMAGE = 'musthafa110/order-service'
+        HOME_IMAGE = 'musthafa110/home-service'
         KUBECONFIG = '/var/lib/jenkins/.kube/config'
         NAMESPACE = 'default'
         MONITORING_NAMESPACE = 'monitoring'
@@ -17,7 +18,7 @@ pipeline {
             }
         }
 
-        stage('Build & Push Docker Images (Blue & Green)') {
+        stage('Build & Push Docker Images (Blue & Green) + Home') {
             steps {
                 script {
                     withCredentials([usernamePassword(credentialsId: "${DOCKER_CREDENTIALS_ID}", usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
@@ -30,6 +31,10 @@ pipeline {
                             docker.image("${PRODUCT_IMAGE}:${v}").push()
                             docker.image("${ORDER_IMAGE}:${v}").push()
                         }
+
+                        // Build and push home-service (no variants)
+                        docker.build("${HOME_IMAGE}", "./home-service")
+                        docker.image("${HOME_IMAGE}").push()
 
                         sh "docker logout"
                     }
@@ -55,8 +60,16 @@ pipeline {
                     kubectl apply -f k8s/order/deployment-green.yaml -n ${NAMESPACE} --record
                     kubectl apply -f k8s/product/service.yaml -n ${NAMESPACE}
                     kubectl apply -f k8s/order/service.yaml -n ${NAMESPACE}
+                    
+                    # Deploy home-service
+                    kubectl apply -f k8s/home/deployment.yaml -n ${NAMESPACE} --record
+                    kubectl apply -f k8s/home/service.yaml -n ${NAMESPACE}
+                    
+                    # Ingress and HPA
                     kubectl apply -f k8s/ingress.yaml -n ${NAMESPACE}
                     kubectl apply -f k8s/hpa.yaml -n ${NAMESPACE}
+                    
+                    # Monitoring
                     kubectl apply -f k8s/product/service-monitor.yaml -n ${MONITORING_NAMESPACE}
                     kubectl apply -f k8s/order/service-monitor.yaml -n ${MONITORING_NAMESPACE}
                 """
@@ -76,10 +89,11 @@ pipeline {
 
     post {
         success {
-            echo "Deployment completed successfully. Green version is active."
+            echo " Deployment completed successfully."
         }
         failure {
-            echo "Deployment failed."
+            echo " Deployment failed."
         }
     }
 }
+
