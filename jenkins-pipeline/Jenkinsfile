@@ -33,7 +33,7 @@ pipeline {
                         }
 
                         // Build and push home-service (no variants)
-                        docker.build("${HOME_IMAGE}", "./home-service")
+                        docker.build("${HOME_IMAGE}", "./home-page")
                         docker.image("${HOME_IMAGE}").push()
 
                         sh "docker logout"
